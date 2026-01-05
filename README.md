@@ -1,158 +1,99 @@
-# 🛡️ SafeShare Pro
-### Executive Python File Sharing Server
+# 🔐 SecurePyShare
 
-Secure. Fast. Controlled.
+**SecurePyShare** is a powerful and secure file-sharing application written in **Python**, designed to help you share files or folders over a local network with optional authentication, a professional web interface, and a desktop control panel.
 
----
-
-## 🔍 What is SafeShare Pro?
-
-SafeShare Pro is a desktop-based file sharing server built with Python.  
-It allows you to share files or folders through a browser with full control and optional authentication.
-
-No cloud.  
-No third-party services.  
-Your files stay with you.
+It is ideal for personal use, small teams, and internal networks where simplicity, security, and performance matter.
 
 ---
 
-## 🎯 Key Capabilities
+## 🚀 Key Features
 
-- Share files or entire folders
-- Access via any web browser
-- Optional username & password protection
-- Clean, modern web interface
-- Upload & download support
-- Desktop control panel (GUI)
-- Real-time logs
-- Multi-user support
-- Runs locally or on LAN
-
----
-
-## 🔐 Security First
-
-- Cookie-based session authentication
-- Protected routes
-- Unauthorized users blocked
-- Manual logout support
-- No exposed credentials
-- No external dependencies
+- 📁 Share a **single file** or an **entire folder**
+- 🌐 Local network (LAN) file server
+- 🔑 Optional **username & password authentication**
+- 🍪 Secure session-based login (Cookies)
+- 🖥️ Professional **Web Dashboard**
+- 📤 Download & preview files from browser
+- 👥 Multi-user access
+- 🧵 High-performance **multi-threaded server**
+- 🎨 Desktop GUI built with **Tkinter**
+- 📱 Responsive & modern web UI
+- 📊 Live server logs inside the app
+- 🛡️ Access protection & directory isolation
 
 ---
 
-## 🧩 Editions
+## 🧩 Application Editions
 
-### 🟢 Community Edition
-- Public file sharing
-- Folder browsing
-- File preview
-- Direct download
-- No login required
+### 🟢 SecurePyShare – Basic Edition
+Lightweight and fast for quick sharing.
 
-### 🔵 Secure Edition
-- Login system
-- Username & password
-- Session management
-- Controlled access
-- Private sharing
+**Includes:**
+- File & folder sharing
+- No authentication
+- Simple web interface
+- Minimal configuration
 
 ---
 
-## 🖥️ Desktop Control Panel
+### 🔵 SecurePyShare – Pro Edition
 
-- Choose file or folder
-- Select network interface
-- Custom port
-- Enable or disable security
-- One-click start / stop
-- Copy or open server link
-- Live activity logs
-
-Simple. Clear. Professional.
-
----
-
-## 🌐 Web Interface
-
-- Modern responsive UI
-- File icons by type
-- Search & filter
-- Preview supported files
-- Download with one click
-- Clean navigation
-- Mobile friendly
+**Includes everything in Basic +**
+- Username & password login
+- Secure sessions
+- Modern web dashboard
+- File preview support
+- Desktop control panel
+- Live logs & status monitoring
+- Google-Drive-like UI experience
 
 ---
 
-## ⚙️ How It Works
+## ⚙️ Requirements
 
-1. Launch SafeShare Pro
-2. Select file or folder
-3. Choose IP and port
-4. (Optional) set username & password
-5. Start service
-6. Share the generated link
-
----
-
-## 🛠️ Built With
-
-- Python 3
-- http.server
-- socketserver
-- threading
-- tkinter
-- HTML / CSS / JavaScript
+- Python **3.9+**
+- Supported OS:
+  - Windows
+  - Linux (limited network detection)
+  - macOS (limited network detection)
 
 ---
 
-## 📦 Use Cases
+## ▶️ How to Run
 
-- Internal team file sharing
-- Local network servers
-- Temporary file distribution
-- Secure file access
-- IT labs & testing
-- Educational environments
+```bash
+python DD.py
+```
 
 ---
 
-## 🚀 Performance
+## 🌍 Access From Browser
 
-- Multi-threaded server
-- Handles multiple clients
-- Stable long-running sessions
-- Low resource usage
+```
+http://IP:PORT
+```
 
----
-
-## 🔮 Future Roadmap
-
-- HTTPS / SSL support
-- File upload permissions
-- User roles
-- Activity logs export
-- Dark mode UI
-- Auto-start service
-- Packaging as EXE
+Example:
+```
+http://192.168.1.10:8000
+```
 
 ---
 
-## 👨‍💻 Author
+## 👨‍💻 Developer
 
-**AbdulRhman AbdulGhaffar**  
-IT System Administrator  
-Network & Security Specialist  
-Python Developer  
+**AbdulRhman AbdulGhaffar**
 
-- Email: abdulrhman.abdulghaffar001@gmail.com  
-- GitHub: https://github.com/AbdulRhmanAbdulGhaffar  
+- GitHub: https://github.com/AbdulRhmanAbdulGhaffar
 - LinkedIn: https://www.linkedin.com/in/abdulrhmanabdulghaffar/
+- Email: abdulrhman.abdulghaffar001@gmail.com
 
 ---
 
-## 📄 License
+## 📜 License
 
-MIT License  
-Free to use. Free to modify. Use responsibly.
+MIT License
+
+---
+
+🛡️ **SecurePyShare — Share Smart, Share Secure**
