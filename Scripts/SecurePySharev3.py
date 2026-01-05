@@ -20,7 +20,7 @@ import time
 import random
 import shutil
 import datetime
-import json
+import json  # Added for delete functionality
 
 # --- Global Config ---
 APP_INSTANCE = None
@@ -81,7 +81,7 @@ def create_auth_handler(served_filename=None):
             return False
 
         def do_POST(self):
-            # Login
+            # 1. Login Logic
             if self.path == '/login':
                 length = int(self.headers.get('Content-Length', 0))
                 body = self.rfile.read(length).decode('utf-8')
@@ -99,44 +99,8 @@ def create_auth_handler(served_filename=None):
                 else:
                     self.send_login_page(error="Access Denied: Invalid Credentials")
                 return
-            
-            # Delete
-            if self.path == '/delete':
-                if not self.check_auth(): 
-                    self.send_error(401, "Unauthorized")
-                    return
-                if not SERVER_CONTEXT["upload_enabled"]:
-                    self.send_error(403, "Action Disabled")
-                    return
-                
-                try:
-                    length = int(self.headers.get('Content-Length', 0))
-                    body = self.rfile.read(length).decode('utf-8')
-                    data = json.loads(body)
-                    filename = data.get('filename')
-                    
-                    if not filename: raise Exception("No filename")
-                    
-                    safe_name = os.path.basename(filename)
-                    target_path = os.path.join(SERVER_CONTEXT["root_dir"], safe_name)
-                    
-                    if os.path.exists(target_path):
-                        if os.path.isdir(target_path):
-                            shutil.rmtree(target_path)
-                        else:
-                            os.remove(target_path)
-                        APP_INSTANCE.log_to_gui(f"[*] Deleted: {safe_name}\n")
-                        self.send_response(200)
-                        self.end_headers()
-                        self.wfile.write(b'{"status":"success"}')
-                    else:
-                        self.send_error(404, "File not found")
-                except Exception as e:
-                    APP_INSTANCE.log_to_gui(f"[!] Delete Error: {e}\n")
-                    self.send_error(500, str(e))
-                return
 
-            # Upload
+            # 2. Upload Logic
             if self.path == '/upload':
                 if not self.check_auth(): return self.send_login_page()
                 if not SERVER_CONTEXT["upload_enabled"]:
@@ -150,44 +114,68 @@ def create_auth_handler(served_filename=None):
                     
                     boundary = content_type.split("boundary=")[1].encode()
                     content_length = int(self.headers.get('Content-Length', 0))
-                    
-                    # Robust multipart parsing (improved from V30)
                     body = self.rfile.read(content_length)
                     parts = body.split(boundary)
                     
+                    # Determine path (Root for simplicity/security in this context)
+                    upload_dir = SERVER_CONTEXT["root_dir"]
+
                     for part in parts:
                         if b'filename="' in part:
-                            # Split headers and content more robustly
                             if b'\r\n\r\n' in part:
                                 headers_part, file_data = part.split(b'\r\n\r\n', 1)
-                                # Remove trailing \r\n-- or --
                                 file_data = file_data.rstrip(b'\r\n--')
-                                if file_data.endswith(b'--'): file_data = file_data[:-2]
-
                                 headers = headers_part.decode()
                                 filename_match = re.search(r'filename="([^"]+)"', headers)
                                 
                                 if filename_match:
                                     filename = filename_match.group(1)
                                     safe_name = os.path.basename(filename)
-                                    
-                                    # Always upload to root_dir in this context to avoid path issues
-                                    save_path = os.path.join(SERVER_CONTEXT["root_dir"], safe_name)
-                                    
+                                    save_path = os.path.join(upload_dir, safe_name)
                                     with open(save_path, 'wb') as f:
                                         f.write(file_data)
-                                        
                                     APP_INSTANCE.log_to_gui(f"[*] Uploaded: {safe_name}\n")
                     
                     self.send_response(200)
                     self.send_header("Content-type", "text/html")
                     self.end_headers()
-                    self.wfile.write(b"OK") # Response for JS handler
+                    self.wfile.write(b"OK") # Response handled by JS
                     return
                 except Exception as e:
                     APP_INSTANCE.log_to_gui(f"[!] Upload Error: {e}\n")
                     self.send_error(500, "Upload Failed")
                     return
+
+            # 3. Delete Logic (NEW)
+            if self.path == '/delete':
+                if not self.check_auth(): 
+                    self.send_error(401)
+                    return
+                if not SERVER_CONTEXT["upload_enabled"]: # Use same perm for delete
+                    self.send_error(403, "Delete Disabled")
+                    return
+                
+                try:
+                    length = int(self.headers.get('Content-Length', 0))
+                    body = self.rfile.read(length).decode('utf-8')
+                    data = json.loads(body)
+                    filename = os.path.basename(data.get('filename'))
+                    target_path = os.path.join(SERVER_CONTEXT["root_dir"], filename)
+                    
+                    if os.path.exists(target_path):
+                        if os.path.isdir(target_path):
+                            shutil.rmtree(target_path)
+                        else:
+                            os.remove(target_path)
+                        APP_INSTANCE.log_to_gui(f"[*] Deleted: {filename}\n")
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b'{"status":"success"}')
+                    else:
+                        self.send_error(404)
+                except Exception as e:
+                    self.send_error(500, str(e))
+                return
 
             return super().do_POST()
 
@@ -204,7 +192,7 @@ def create_auth_handler(served_filename=None):
                 return
 
             try:
-                # SINGLE FILE LOGIC FIX (V30 Logic)
+                # SINGLE FILE LOGIC FIX
                 if self.target_file:
                     req_path_unquoted = unquote(self.path.lstrip('/'))
                     
@@ -218,113 +206,93 @@ def create_auth_handler(served_filename=None):
                          self.send_error(404)
                          return
                     else:
-                        self.send_error(403, "Access Denied: Restricted File")
+                        self.send_error(403, "Access Denied")
                         return
                         
                 return super().do_GET()
             except: pass
 
         def get_common_assets(self):
-            # SVGs
-            ic_li = '<svg width="24" height="24" fill="#0077b5" viewBox="0 0 24 24"><path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/></svg>'
-            ic_gh = '<svg width="24" height="24" fill="#333" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>'
-            ic_em = '<svg width="24" height="24" fill="#ea4335" viewBox="0 0 24 24"><path d="M0 3v18h24v-18h-24zm21.518 2l-9.518 7.713-9.518-7.713h19.036zm-19.518 14v-11.817l10 8.104 10-8.104v11.817h-20z"/></svg>'
+            # Optimized SVGs
+            ic_li = '<svg width="20" height="20" fill="#0077b5" viewBox="0 0 24 24"><path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/></svg>'
+            ic_gh = '<svg width="20" height="20" fill="#333" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>'
+            ic_em = '<svg width="20" height="20" fill="#ea4335" viewBox="0 0 24 24"><path d="M0 3v18h24v-18h-24zm21.518 2l-9.518 7.713-9.518-7.713h19.036zm-19.518 14v-11.817l10 8.104 10-8.104v11.817h-20z"/></svg>'
             
             css = """
             <style>
-                @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-                :root { --primary: #6366f1; --primary-dark: #4338ca; --accent: #ec4899; --bg: #0f172a; --surface: #1e293b; --text: #f8fafc; --text-muted: #94a3b8; --border: #334155; }
-                * { box-sizing: border-box; outline: none; }
-                body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--bg); color: var(--text); margin: 0; min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; }
+                @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+                :root { --primary:#4f46e5; --bg:#f8fafc; --surface:#ffffff; --text:#0f172a; --border:#e2e8f0; --danger:#ef4444; }
+                * { box-sizing: border-box; }
+                body { font-family: 'Plus Jakarta Sans', sans-serif; background: var(--bg); color: var(--text); margin: 0; min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; }
                 
-                /* Advanced Animations */
-                @keyframes fadeInUp { 0% { opacity: 0; transform: translateY(20px); } 100% { opacity: 1; transform: translateY(0); } }
-                @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+                /* Animations */
+                @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
                 @keyframes float { 0% { transform: translateY(0px); } 50% { transform: translateY(-10px); } 100% { transform: translateY(0px); } }
-                @keyframes gradient-x { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+                @keyframes gradientBG { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
 
                 /* Animated Background */
-                .bg-animate {
-                    position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1;
-                    background: linear-gradient(-45deg, #0f172a, #1e1b4b, #312e81, #1e293b);
+                .animated-bg {
+                    background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
                     background-size: 400% 400%;
-                    animation: gradient-x 15s ease infinite;
+                    animation: gradientBG 15s ease infinite;
+                    position: absolute;
+                    top: 0; left: 0; width: 100%; height: 100%;
+                    z-index: -1;
                 }
 
-                /* Navbar */
-                nav { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); padding: 1rem 5%; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 50; animation: fadeIn 0.8s ease-out; }
-                .brand { font-weight: 800; font-size: 1.5rem; letter-spacing: -0.5px; display: flex; align-items: center; gap: 10px; background: linear-gradient(to right, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-                .logout-btn { color: #f87171; background: rgba(239, 68, 68, 0.1); padding: 0.6rem 1.2rem; border-radius: 12px; text-decoration: none; font-weight: 600; font-size: 0.9rem; transition: 0.3s; border: 1px solid rgba(239, 68, 68, 0.2); }
-                .logout-btn:hover { background: rgba(239, 68, 68, 0.2); transform: translateY(-2px); }
-
-                main { max-width: 1200px; margin: 0 auto; padding: 2rem 5%; width: 100%; flex: 1; }
-                
-                /* Banner */
-                .banner { 
-                    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(168, 85, 247, 0.1) 100%); 
-                    border: 1px solid rgba(255, 255, 255, 0.1);
-                    border-radius: 24px; padding: 3rem 2rem; text-align: center; margin-bottom: 3rem; 
-                    box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.3); backdrop-filter: blur(10px);
-                    position: relative; overflow: hidden; animation: fadeInUp 0.6s ease-out;
-                }
-                .banner h1 { margin: 0 0 1rem 0; font-size: 2.5rem; font-weight: 800; letter-spacing: -1px; background: linear-gradient(to right, #fff, #cbd5e1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-                .banner p { margin: 0; color: var(--text-muted); font-size: 1.1rem; line-height: 1.6; max-width: 600px; margin: 0 auto; }
-
-                /* Toolbar */
-                .toolbar { display: flex; gap: 1rem; margin-bottom: 2rem; align-items: center; flex-wrap: wrap; background: rgba(30, 41, 59, 0.6); padding: 1rem; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); backdrop-filter: blur(10px); animation: fadeInUp 0.7s ease-out; }
-                .path-display { font-family: 'Consolas', monospace; color: #818cf8; background: rgba(99, 102, 241, 0.1); padding: 0.7rem 1rem; border-radius: 8px; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; border: 1px solid rgba(99, 102, 241, 0.2); }
-                .search-input { padding: 0.7rem 1.2rem; border: 1px solid var(--border); border-radius: 12px; background: rgba(15, 23, 42, 0.5); color: white; width: 250px; transition: 0.3s; outline: none; }
-                .search-input:focus { border-color: var(--primary); background: rgba(30, 41, 59, 0.8); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2); }
-
-                /* Upload Zone */
-                .upload-zone { border: 2px dashed var(--border); border-radius: 20px; padding: 3rem 2rem; text-align: center; cursor: pointer; transition: 0.3s; margin-bottom: 3rem; background: rgba(30, 41, 59, 0.3); position: relative; overflow: hidden; animation: fadeInUp 0.8s ease-out; }
-                .upload-zone:hover { border-color: var(--primary); background: rgba(99, 102, 241, 0.05); transform: scale(1.01); }
-                .upload-icon { font-size: 3rem; margin-bottom: 1rem; display: block; filter: drop-shadow(0 0 10px rgba(99, 102, 241, 0.5)); animation: float 3s ease-in-out infinite; }
-                .up-text { color: var(--text-muted); font-size: 1rem; }
-                .up-text strong { color: var(--primary); }
-                .progress-bar { height: 4px; background: rgba(255,255,255,0.1); width: 100%; position: absolute; bottom: 0; left: 0; display: none; }
-                .progress-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent)); width: 0%; transition: width 0.3s ease; box-shadow: 0 0 10px var(--primary); }
-
-                /* Grid */
-                .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; }
-                .card { background: rgba(30, 41, 59, 0.6); border: 1px solid var(--border); border-radius: 20px; padding: 1.5rem; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); display: flex; flex-direction: column; position: relative; overflow: hidden; opacity: 0; animation: fadeInUp 0.5s ease-out forwards; backdrop-filter: blur(10px); }
-                .card:hover { transform: translateY(-8px); box-shadow: 0 20px 40px -10px rgba(0,0,0,0.5); border-color: var(--primary); background: rgba(30, 41, 59, 0.8); }
-                
-                .card-header { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1.2rem; }
-                .file-icon { font-size: 2.8rem; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3)); transition: 0.3s; }
-                .card:hover .file-icon { transform: scale(1.1) rotate(5deg); }
-                .file-info { min-width: 0; flex: 1; }
-                .file-name { font-weight: 700; color: var(--text); font-size: 1.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 0.4rem; }
-                .file-meta { font-size: 0.85rem; color: var(--text-muted); display: flex; gap: 8px; align-items: center; }
-                
-                .card-actions { margin-top: auto; display: flex; gap: 10px; }
-                .btn { padding: 10px 16px; border-radius: 12px; text-decoration: none; font-size: 0.9rem; font-weight: 600; text-align: center; transition: 0.2s; cursor: pointer; flex: 1; border: none; display: flex; align-items: center; justify-content: center; gap: 6px; }
-                
-                .btn-preview { background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--border); } 
-                .btn-preview:hover { background: rgba(255,255,255,0.1); color: white; border-color: white; }
-                
-                .btn-download { background: var(--primary); color: white; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3); } 
-                .btn-download:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 6px 16px rgba(99, 102, 241, 0.4); }
-                
-                .btn-delete { background: rgba(239, 68, 68, 0.1); color: #f87171; flex: 0 0 auto; padding: 10px; border: 1px solid rgba(239, 68, 68, 0.2); } 
-                .btn-delete:hover { background: rgba(239, 68, 68, 0.2); color: white; border-color: #f87171; }
-                
-                .btn-open { background: rgba(234, 179, 8, 0.1); color: #facc15; width: 100%; border: 1px solid rgba(234, 179, 8, 0.2); }
-                .btn-open:hover { background: rgba(234, 179, 8, 0.2); color: #fde047; border-color: #fde047; }
-
-                /* Footer */
-                footer { text-align: center; padding: 3rem 0; border-top: 1px solid var(--border); margin-top: auto; background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(10px); }
-                .footer-links { display: flex; justify-content: center; gap: 2rem; margin-top: 2rem; }
-                .footer-links a { color: var(--text-muted); text-decoration: none; font-weight: 500; display: flex; align-items: center; gap: 8px; transition: 0.3s; padding: 8px 16px; border-radius: 20px; background: rgba(255,255,255,0.03); border: 1px solid transparent; }
-                .footer-links a:hover { color: white; background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.1); transform: translateY(-3px); }
-                
-                /* Toast */
-                .toast { position: fixed; bottom: 30px; right: 30px; background: rgba(16, 185, 129, 0.9); backdrop-filter: blur(10px); color: white; padding: 16px 24px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); transform: translateY(150px); transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); z-index: 1000; font-weight: 600; border: 1px solid rgba(255,255,255,0.2); display: flex; align-items: center; gap: 10px; }
+                /* Toast Notification */
+                .toast { position: fixed; bottom: 20px; right: 20px; background: #10b981; color: white; padding: 12px 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transform: translateY(100px); transition: 0.3s; z-index: 1000; font-weight: 600; }
                 .toast.show { transform: translateY(0); }
-                .toast.error { background: rgba(239, 68, 68, 0.9); }
+                .toast.error { background: #ef4444; }
 
-                @media (max-width: 640px) { .search-input { width: 100%; order: 3; margin-top: 10px; } .toolbar { gap: 0.5rem; } .banner { padding: 2rem 1.5rem; } .footer-links { flex-direction: column; gap: 1rem; } }
+                nav { background: rgba(255,255,255,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); padding: 0.8rem 5%; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 50; animation: fadeIn 0.5s ease-out; }
+                .brand { font-weight: 800; color: var(--primary); font-size: 1.3rem; letter-spacing: -0.5px; display: flex; align-items: center; gap: 8px; }
+                .logout-btn { color: #ef4444; background: #fef2f2; padding: 0.5rem 1rem; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 0.875rem; transition:0.2s; border: 1px solid transparent; }
+                .logout-btn:hover { border-color: #fecaca; background: #fee2e2; }
+
+                main { max-width: 1200px; margin: 0 auto; padding: 2rem 5%; width: 100%; flex: 1; animation: fadeIn 0.8s ease-out; }
+                
+                .banner { background: linear-gradient(135deg, rgba(79, 70, 229, 0.9), rgba(59, 130, 246, 0.9)); border-radius: 20px; padding: 3rem; color: white; margin-bottom: 2.5rem; text-align: center; box-shadow: 0 20px 25px -5px rgba(79, 70, 229, 0.3); backdrop-filter: blur(5px); }
+                .banner h1 { margin: 0 0 0.5rem 0; font-size: 2rem; font-weight: 800; text-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                .banner p { margin: 0; opacity: 0.95; font-size: 1.1rem; }
+
+                .toolbar { display: flex; gap: 1rem; margin-bottom: 1.5rem; align-items: center; flex-wrap: wrap; background: rgba(255,255,255,0.9); padding: 1rem; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); backdrop-filter: blur(10px); }
+                .path-display { font-family: monospace; color: #64748b; font-weight: 600; flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                .search-input { padding: 0.7rem 1rem; border: 1px solid var(--border); border-radius: 10px; width: 250px; transition: 0.2s; background: #f8fafc; }
+                .search-input:focus { border-color: var(--primary); background: white; box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1); }
+
+                .upload-zone { border: 2px dashed #cbd5e1; border-radius: 16px; padding: 2.5rem; text-align: center; cursor: pointer; transition: 0.3s; margin-bottom: 2.5rem; background: rgba(255,255,255,0.6); position: relative; overflow: hidden; }
+                .upload-zone:hover { border-color: var(--primary); background: #eff6ff; transform: scale(1.01); }
+                .upload-icon { font-size: 2.5rem; margin-bottom: 0.5rem; display: block; animation: float 3s ease-in-out infinite; }
+                .progress-bar { height: 4px; background: #e2e8f0; width: 100%; position: absolute; bottom: 0; left: 0; display: none; }
+                .progress-fill { height: 100%; background: #10b981; width: 0%; transition: width 0.2s; }
+
+                .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.5rem; }
+                .card { background: rgba(255,255,255,0.9); border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem; transition: 0.3s; display: flex; flex-direction: column; position: relative; opacity: 0; animation: fadeIn 0.5s ease-out forwards; backdrop-filter: blur(5px); }
+                .card:hover { transform: translateY(-5px); box-shadow: 0 15px 30px -10px rgba(0,0,0,0.1); border-color: #bfdbfe; }
+                
+                .card-header { display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 1rem; }
+                .file-icon { font-size: 2.5rem; transition: 0.3s; }
+                .card:hover .file-icon { transform: scale(1.1); }
+                .file-info { min-width: 0; flex: 1; }
+                .file-name { font-weight: 700; color: var(--text); font-size: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 0.2rem; }
+                .file-meta { font-size: 0.8rem; color: #94a3b8; }
+                
+                .card-actions { margin-top: auto; display: flex; gap: 8px; }
+                .btn { padding: 8px 12px; border-radius: 8px; text-decoration: none; font-size: 0.85rem; font-weight: 600; text-align: center; transition: 0.2s; cursor: pointer; flex: 1; border: none; }
+                .btn-preview { background: #f1f5f9; color: var(--primary); } .btn-preview:hover { background: #e2e8f0; }
+                .btn-download { background: #ecfdf5; color: #059669; } .btn-download:hover { background: #d1fae5; }
+                .btn-delete { background: #fef2f2; color: #ef4444; flex: 0; padding: 8px 12px; } .btn-delete:hover { background: #fee2e2; transform: scale(1.05); }
+                .btn-open { background: #fff7ed; color: #ea580c; width: 100%; }
+
+                footer { text-align: center; padding: 3rem 0; border-top: 1px solid var(--border); background: white; margin-top: auto; position: relative; z-index: 10; }
+                .footer-links { display: flex; justify-content: center; gap: 1.5rem; margin-top: 1.5rem; }
+                .footer-links a { color: #64748b; text-decoration: none; font-weight: 500; display: flex; align-items: center; gap: 6px; transition: 0.2s; }
+                .footer-links a:hover { color: var(--primary); transform: translateY(-2px); }
+                
+                @media (max-width: 640px) { .search-input { width: 100%; order: 3; } .toolbar { gap: 0.5rem; } .banner { padding: 2rem 1.5rem; } }
             </style>
+            <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
             """
             return css, ic_li, ic_gh, ic_em
 
@@ -334,24 +302,33 @@ def create_auth_handler(served_filename=None):
             self.end_headers()
             css, li, gh, em = self.get_common_assets()
             
-            html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Login | AbdulRhman Secure</title>{css}
-            <style>body{{justify-content:center;align-items:center;padding:20px;height:100vh;overflow:hidden}} .login-box{{background:rgba(30, 41, 59, 0.8);backdrop-filter:blur(20px);padding:3.5rem;border-radius:30px;box-shadow:0 0 60px rgba(0,0,0,0.6);width:100%;max-width:420px;text-align:center;border:1px solid rgba(255,255,255,0.1);animation:fadeInUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);position:relative;z-index:10}} .login-icon{{font-size:4rem;margin-bottom:1.5rem;display:inline-block;animation:float 3s ease-in-out infinite;filter:drop-shadow(0 0 20px rgba(99,102,241,0.4))}} .inp{{width:100%;padding:1.1rem;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);border-radius:14px;margin-bottom:1.2rem;font-size:1rem;color:white;transition:0.3s;outline:none}} .inp:focus{{border-color:var(--primary);background:rgba(0,0,0,0.5);box-shadow:0 0 0 4px rgba(99, 102, 241, 0.2)}} .btn-login{{width:100%;padding:1.1rem;background:linear-gradient(135deg, var(--primary), var(--accent));color:white;border:none;border-radius:14px;font-weight:700;font-size:1.1rem;cursor:pointer;transition:0.3s;box-shadow:0 10px 20px -5px rgba(99, 102, 241, 0.4);letter-spacing:0.5px}} .btn-login:hover{{transform:translateY(-3px) scale(1.02);box-shadow:0 20px 30px -10px rgba(99, 102, 241, 0.6)}} .divider{{margin:2.5rem 0 1.5rem;border-top:1px solid rgba(255,255,255,0.1);position:relative}} .divider span{{position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:#1e293b;padding:0 15px;color:var(--text-muted);font-size:0.8rem;font-weight:600;letter-spacing:1px}}</style></head><body>
-            <div class="bg-animate"></div>
+            html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Login</title>{css}
+            <style>
+                body {{ justify-content: center; align-items: center; padding: 20px; height: 100vh; overflow: hidden; }}
+                .login-box {{ background: rgba(255,255,255,0.85); backdrop-filter: blur(15px); padding: 3rem; border-radius: 24px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.15); width: 100%; max-width: 400px; text-align: center; border: 1px solid rgba(255,255,255,0.5); animation: fadeIn 0.8s cubic-bezier(0.2, 0.8, 0.2, 1); position: relative; z-index: 10; }}
+                .inp {{ width: 100%; padding: 1rem; border: 2px solid #e2e8f0; border-radius: 12px; margin-bottom: 1rem; font-size: 1rem; transition: 0.2s; background: rgba(255,255,255,0.8); }}
+                .inp:focus {{ border-color: var(--primary); background: white; box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1); transform: scale(1.01); }}
+                .btn-login {{ width: 100%; padding: 1rem; background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%); color: white; border: none; border-radius: 12px; font-weight: 700; font-size: 1rem; cursor: pointer; transition: 0.3s; box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.3); }}
+                .btn-login:hover {{ transform: translateY(-2px); box-shadow: 0 20px 25px -5px rgba(79, 70, 229, 0.4); }}
+            </style></head><body>
+            <div class="animated-bg"></div>
             <div class="login-box">
-                <div class="login-icon">🛡️</div>
-                <h1 style="color:white;margin:0 0 0.5rem;font-size:2rem;font-weight:800;letter-spacing:-1px">Secure Access</h1>
-                <p style="color:var(--text-muted);margin-bottom:2.5rem;line-height:1.6;font-size:1rem">Identity Verification Required</p>
-                {f'<div style="background:rgba(239, 68, 68, 0.1);color:#f87171;padding:1rem;border-radius:12px;margin-bottom:2rem;font-size:0.95rem;border:1px solid rgba(239, 68, 68, 0.2);font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px;animation:fadeIn 0.3s">🚫 {error}</div>' if error else ''}
+                <div style="font-size:4rem;margin-bottom:1rem;animation:float 3s ease-in-out infinite">🔐</div>
+                <h1 style="color:var(--text);margin:0 0 0.5rem;font-size:1.8rem;font-weight:800">Secure Access</h1>
+                <p style="color:#64748b;margin-bottom:2rem;line-height:1.6">Welcome to AbdulRhman's V3.0 Portal<br>Please authenticate to continue.</p>
+                {f'<div style="background:#fef2f2;color:#ef4444;padding:0.8rem;border-radius:8px;margin-bottom:1.5rem;font-size:0.9rem;border:1px solid #fee2e2;font-weight:600;animation:fadeIn 0.3s">⚠️ {error}</div>' if error else ''}
                 <form method="POST" action="/login">
-                    <input type="text" name="username" class="inp" placeholder="Username ID" required autofocus autocomplete="off">
-                    <input type="password" name="password" class="inp" placeholder="Access Password" required>
-                    <button type="submit" class="btn-login">Unlock Workspace 🔓</button>
+                    <input type="text" name="username" class="inp" placeholder="Username" required autofocus>
+                    <input type="password" name="password" class="inp" placeholder="Password" required>
+                    <button type="submit" class="btn-login">Unlock Workspace</button>
                 </form>
-                <div class="divider"><span>DEVELOPER CONTACT</span></div>
-                <div style="display:flex;justify-content:center;gap:1.5rem;margin-top:1rem">
-                    <a href="https://www.linkedin.com/in/abdulrhmanabdulghaffar/" target="_blank" style="opacity:0.7;transition:0.3s;transform:scale(1.2)">{li}</a>
-                    <a href="https://github.com/AbdulRhmanAbdulGhaffar" target="_blank" style="opacity:0.7;transition:0.3s;transform:scale(1.2)">{gh}</a>
-                    <a href="mailto:abdulrhman.abdulghaffar001@gmail.com" style="opacity:0.7;transition:0.3s;transform:scale(1.2)">{em}</a>
+                <div style="margin-top:2.5rem;border-top:1px solid #e2e8f0;padding-top:1.5rem;font-size:0.85rem;color:#64748b;font-weight:500">
+                    Connect with Developer
+                    <div class="footer-links" style="margin-top:0.75rem">
+                        <a href="https://www.linkedin.com/in/abdulrhmanabdulghaffar/" target="_blank">{li}</a>
+                        <a href="https://github.com/AbdulRhmanAbdulGhaffar" target="_blank">{gh}</a>
+                        <a href="mailto:abdulrhman.abdulghaffar001@gmail.com">{em}</a>
+                    </div>
                 </div>
             </div></body></html>"""
             self.wfile.write(html.encode('utf-8'))
@@ -359,12 +336,11 @@ def create_auth_handler(served_filename=None):
         def guess_icon(self, path, is_dir):
             if is_dir: return "📁", "#f59e0b"
             ext = os.path.splitext(path)[1].lower()
-            if ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']: return "🖼️", "#f472b6"
-            if ext in ['.mp4', '.mkv', '.avi', '.mov']: return "🎬", "#a78bfa"
-            if ext in ['.mp3', '.wav']: return "🎵", "#34d399"
-            if ext in ['.pdf']: return "📕", "#f87171"
-            if ext in ['.zip', '.rar']: return "📦", "#fb923c"
-            if ext in ['.py', '.js', '.html']: return "💻", "#94a3b8"
+            if ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']: return "🖼️", "#ec4899"
+            if ext in ['.mp4', '.mkv', '.avi', '.mov']: return "🎥", "#8b5cf6"
+            if ext in ['.mp3', '.wav']: return "🎵", "#10b981"
+            if ext in ['.pdf']: return "📕", "#ef4444"
+            if ext in ['.zip', '.rar']: return "📦", "#f97316"
             return "📄", "#94a3b8"
 
         def list_directory(self, path):
@@ -380,20 +356,19 @@ def create_auth_handler(served_filename=None):
                 upload_html = """
                 <div class="upload-zone" onclick="document.getElementById('file-input').click()">
                     <div class="upload-icon">☁️</div>
-                    <div class="up-text" style="color:var(--text-muted);font-weight:500;font-size:1.1rem">Drag & Drop files here or <strong>Click to Upload</strong></div>
+                    <div class="up-text" style="color:#64748b;font-weight:500"><strong>Click to Upload</strong> or Drag & Drop here</div>
                     <div class="progress-bar"><div class="progress-fill"></div></div>
                     <input id="file-input" type="file" onchange="uploadFile(this)" style="display:none">
                 </div>
                 """
 
-            f.write(f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AbdulRhman Cloud</title>{css}
+            f.write(f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>AbdulRhman Cloud V3.0</title>{css}
             <script>
-                function showToast(msg, type='success') {{
-                    const t = document.createElement('div');
-                    t.className = `toast show ${{type === 'error' ? 'error' : ''}}`;
-                    t.innerHTML = msg;
-                    document.body.appendChild(t);
-                    setTimeout(() => {{ t.classList.remove('show'); setTimeout(() => t.remove(), 300); }}, 3000);
+                function showToast(msg, isError=false) {{
+                    const t = document.getElementById('toast');
+                    t.innerText = msg;
+                    t.className = isError ? 'toast show error' : 'toast show';
+                    setTimeout(() => {{ t.className = t.className.replace('show', ''); }}, 3000);
                 }}
                 function filter() {{ let val = document.getElementById('search').value.toLowerCase(); document.querySelectorAll('.card').forEach(el => {{ el.style.display = el.getAttribute('data-name').includes(val) ? 'flex' : 'none'; }}); }}
                 
@@ -404,8 +379,9 @@ def create_auth_handler(served_filename=None):
                         xhr.open("POST", "/upload", true); 
                         xhr.upload.onprogress = function(e) {{ if (e.lengthComputable) {{ let pct = (e.loaded / e.total) * 100; document.querySelector('.progress-bar').style.display = 'block'; document.querySelector('.progress-fill').style.width = pct + '%'; }} }};
                         xhr.onload = function() {{ 
-                            if(xhr.status == 200) {{ showToast("✅ Upload Successful!"); setTimeout(() => window.location.reload(), 1000); }}
-                            else {{ showToast("❌ Upload Failed", 'error'); }}
+                            if(xhr.status == 200) {{ 
+                                Swal.fire({{ title: 'Success!', text: 'File Uploaded Successfully', icon: 'success', confirmButtonColor: '#4f46e5' }}).then(() => window.location.reload());
+                            }} else {{ Swal.fire('Error', 'Upload Failed', 'error'); }}
                         }}; 
                         xhr.send(fd); 
                     }} 
@@ -413,35 +389,37 @@ def create_auth_handler(served_filename=None):
                 
                 function deleteFile(name) {{
                     Swal.fire({{
-                        title: 'Delete File?', text: "You cannot undo this action!", icon: 'warning', background: '#1e293b', color: '#f8fafc',
-                        showCancelButton: true, confirmButtonColor: '#ef4444', cancelButtonColor: '#475569', confirmButtonText: 'Yes, Delete it!'
+                        title: 'Are you sure?', text: "You won't be able to revert this!", icon: 'warning',
+                        showCancelButton: true, confirmButtonColor: '#ef4444', cancelButtonColor: '#cbd5e1', confirmButtonText: 'Yes, delete it!'
                     }}).then((result) => {{
                         if (result.isConfirmed) {{
                             fetch('/delete', {{
                                 method: 'POST', headers: {{'Content-Type': 'application/json'}},
                                 body: JSON.stringify({{filename: name}})
                             }}).then(r => {{
-                                if(r.ok) {{ Swal.fire({{title: 'Deleted!', icon: 'success', background: '#1e293b', color: '#f8fafc', timer: 1500, showConfirmButton: false}}).then(() => window.location.reload()); }}
-                                else {{ Swal.fire({{title: 'Error', text: 'Action Failed', icon: 'error', background: '#1e293b', color: '#f8fafc'}}); }}
+                                if(r.ok) {{ Swal.fire('Deleted!', 'File has been deleted.', 'success').then(() => window.location.reload()); }}
+                                else {{ Swal.fire('Error', 'Could not delete file.', 'error'); }}
                             }});
                         }}
                     }})
                 }}
             </script>
             </head><body>
-            <div class="bg-animate"></div>
-            <nav><div class="brand"><span>💎</span> SafeShare Pro</div><a href="/logout" class="logout-btn">Sign Out</a></nav>
+            <div class="animated-bg"></div>
+            <div id="toast" class="toast"></div>
+            <nav><div class="brand"><span>💎</span> SecurePyShare V3.0 </div><a href="/logout" class="logout-btn">Sign Out</a></nav>
             <main>
-                <div class="banner"><h1>Welcome to V3.6 Ultimate Workspace 🚀</h1><p>Managed by AbdulRhman AbdulGhaffar • High Performance & Security</p></div>
+                <div class="banner"><h1>Welcome to SecurePyShareWorkspace 🚀</h1><p>Managed by AbdulRhman AbdulGhaffar • Complete Control</p></div>
                 <div class="toolbar">
-                    {f'<a href="../" style="text-decoration:none;background:rgba(255,255,255,0.1);padding:0.7rem;border-radius:10px;border:1px solid var(--border);font-size:1.2rem;display:flex;align-items:center;color:white">⬅️</a>' if self.path != '/' else ''}
+                    {f'<a href="../" style="text-decoration:none;background:white;padding:0.7rem;border-radius:10px;border:1px solid #e2e8f0;font-size:1.2rem;display:flex;align-items:center">⬅️</a>' if self.path != '/' else ''}
                     <div class="path-display">{display_path}</div>
-                    <input id="search" class="search-input" onkeyup="filter()" placeholder="🔍 Search files...">
+                    <input id="search" class="search-input" onkeyup="filter()" placeholder="Search files...">
                 </div>
                 {upload_html}
                 <div class="grid">
             """.encode('utf-8'))
 
+            # Staggered animation index
             anim_delay = 0
             for name in list_dir:
                 if name.startswith('.'): continue
@@ -455,7 +433,7 @@ def create_auth_handler(served_filename=None):
                 except: meta = ""
 
                 del_btn = ""
-                if SERVER_CONTEXT["upload_enabled"]: 
+                if SERVER_CONTEXT["upload_enabled"]: # Show delete if upload (modify) is enabled
                      del_btn = f'<button onclick="deleteFile(\'{name}\')" class="btn btn-delete" title="Delete">🗑️</button>'
 
                 if is_dir:
@@ -475,15 +453,15 @@ def create_auth_handler(served_filename=None):
                     <div class="card-actions">{btns} {del_btn}</div>
                 </div>
                 """.encode('utf-8'))
-                anim_delay += 0.05
+                anim_delay += 0.05 # Increment delay for staggered effect
 
             f.write(f"""</div>
             <footer>
-                <div style="font-weight:700;color:white;margin-bottom:8px;font-size:1.1rem;letter-spacing:-0.5px">AbdulRhman's V3.6 System</div>
-                <div class="copyright" style="color:var(--text-muted)">Designed & Developed with ❤️ by AbdulRhman AbdulGhaffar</div>
+                <div style="font-weight:700;color:#0f172a;margin-bottom:5px;font-size:1.1rem">SecurePyShare V 3.0 </div>
+                <div class="copyright">Designed with ❤️ by AbdulRhman AbdulGhaffar</div>
                 <div class="footer-links">
                     <a href="https://www.linkedin.com/in/abdulrhmanabdulghaffar/" target="_blank">{li} LinkedIn</a>
-                    <a href="https://github.com/AbdulRhmanAbdulGhaffar" target="_blank" style="color:white">{gh} GitHub</a>
+                    <a href="https://github.com/AbdulRhmanAbdulGhaffar" target="_blank">{gh} GitHub</a>
                     <a href="mailto:abdulrhman.abdulghaffar001@gmail.com">{em} Email</a>
                 </div>
             </footer>
@@ -530,7 +508,7 @@ class FileShareApp:
         global APP_INSTANCE
         APP_INSTANCE = self
         self.root = root
-        self.root.title("SafeShare Pro V3.6 🛡️")
+        self.root.title("SafeShare Pro V3.0 🛡️")
         self.root.geometry("600x800")
         self.root.configure(bg="#ffffff")
         self.server = None
@@ -543,7 +521,7 @@ class FileShareApp:
         header = tk.Frame(self.root, bg="#ffffff")
         header.pack(fill="x", pady=25)
         tk.Label(header, text="SafeShare Pro", font=("Segoe UI", 26, "bold"), bg="#ffffff", fg="#4f46e5").pack()
-        tk.Label(header, text="V3.6 • Ultimate Edition", font=("Segoe UI", 10), bg="#ffffff", fg="#5f6368").pack()
+        tk.Label(header, text="V3.0 • Complete Control Edition", font=("Segoe UI", 10), bg="#ffffff", fg="#5f6368").pack()
 
         main = tk.Frame(self.root, bg="#ffffff")
         main.pack(fill="both", expand=True, padx=40)
